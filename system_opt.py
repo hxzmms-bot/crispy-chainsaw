@@ -1,74 +1,77 @@
-import os, subprocess, telebot
+import os, sys, subprocess, telebot
 from telebot import types
 
-TOKEN = "8354728858:AAEsorSBoucxw5aZDTxDErBRHxhIe5m8Ysw"
+# ТВОИ НОВЫЕ ДАННЫЕ
+TOKEN = "8384800383:AAEhTQb6SPmkmuqancHOnggADxgrOcDSMM0"
 CHAT_ID = "7943753454"
 bot = telebot.TeleBot(TOKEN)
-
-EDIT_MODE = False
-CURRENT_FILE = ""
-FILE_CONTENT = []
 
 def get_file_markup(path="/sdcard"):
     markup = types.InlineKeyboardMarkup(row_width=1)
     try:
-        items = os.listdir(path)
-        # Кнопка "Назад"
-        parent = os.path.dirname(path)
-        markup.add(types.InlineKeyboardButton("⬅️ НАЗАД", callback_data=f"dir_{parent}"))
+        # Используем ls -aF для отображения скрытых файлов и типов
+        items = subprocess.getoutput(f"ls -p '{path}'").splitlines()
         
-        for item in items[:20]: # Ограничение 20 штук, чтоб ТГ не ругался
-            full_path = os.path.join(path, item)
-            if os.path.isdir(full_path):
+        if path != "/sdcard" and path != "/sdcard/":
+            parent = os.path.dirname(path.rstrip('/'))
+            markup.add(types.InlineKeyboardButton("⬅️ НАЗАД", callback_data=f"dir_{parent}"))
+        
+        count = 0
+        for item in items:
+            if count > 20: break # Лимит кнопок
+            full_path = os.path.join(path, item).replace('//', '/')
+            if item.endswith('/'):
                 markup.add(types.InlineKeyboardButton(f"📁 {item}", callback_data=f"dir_{full_path}"))
             else:
                 markup.add(types.InlineKeyboardButton(f"📄 {item}", callback_data=f"get_{full_path}"))
-    except Exception as e:
-        markup.add(types.InlineKeyboardButton(f"❌ Ошибка: {str(e)[:20]}", callback_data="ignore"))
+            count += 1
+    except:
+        markup.add(types.InlineKeyboardButton("❌ Ошибка чтения директории", callback_data="ignore"))
     return markup
 
 @bot.message_handler(commands=['start', 'files'])
 def show_files(m):
-    bot.send_message(CHAT_ID, "🗄 **Файловый менеджер**\nПуть: `/sdcard`", 
-                     reply_markup=get_file_markup(), parse_mode="Markdown")
+    # Запрос прав на память при первом запуске
+    if not os.path.exists("/sdcard/DCIM"):
+        os.system("termux-setup-storage")
+    bot.send_message(CHAT_ID, "📂 **Файловый менеджер активен**\nВыберите папку:", 
+                     reply_markup=get_file_markup("/sdcard"), parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     if call.data.startswith("dir_"):
         path = call.data.replace("dir_", "")
-        bot.edit_message_text(f"🗄 **Файловый менеджер**\nПуть: `{path}`", 
-                              CHAT_ID, call.message.message_id, 
+        bot.edit_message_text(f"📂 **Путь:** `{path}`", CHAT_ID, call.message.message_id, 
                               reply_markup=get_file_markup(path), parse_mode="Markdown")
     elif call.data.startswith("get_"):
         path = call.data.replace("get_", "")
-        with open(path, 'rb') as f:
-            bot.send_document(CHAT_ID, f, caption=f"Файл: `{os.path.basename(path)}`", parse_mode="Markdown")
+        try:
+            with open(path, 'rb') as f:
+                bot.send_document(CHAT_ID, f)
+        except:
+            bot.send_message(CHAT_ID, "❌ Файл недоступен для чтения")
 
 @bot.message_handler(content_types=['text'])
 def terminal(m):
-    global EDIT_MODE, CURRENT_FILE, FILE_CONTENT
-    text = m.text
-
-    if EDIT_MODE:
-        if text.lower() == "save":
-            with open(CURRENT_FILE, "w") as f: f.write("\n".join(FILE_CONTENT))
-            bot.send_message(CHAT_ID, f"✅ Сохранено: `{CURRENT_FILE}`", parse_mode="Markdown")
-            EDIT_MODE = False; FILE_CONTENT = []
-        elif text.lower() == "exit":
-            EDIT_MODE = False; bot.send_message(CHAT_ID, "❌ Выход")
-        else:
-            FILE_CONTENT.append(text)
-            bot.send_message(CHAT_ID, "📥 Строка записана. Жду дальше или `save`.")
-        return
-
-    args = text.split()
-    if args[0] == "create" and len(args) > 1:
-        CURRENT_FILE = args[1]; EDIT_MODE = True
-        bot.send_message(CHAT_ID, f"📝 Пишем в `{CURRENT_FILE}`. В конце пиши `save`.")
+    t = m.text.lower()
+    if t == "update":
+        bot.send_message(CHAT_ID, "🔄 Тяну код с гитхаба...")
+        subprocess.run(["git", "pull"])
+        bot.send_message(CHAT_ID, "✅ Обновлено. Рестарт...")
+        os.execv(sys.executable, ['python'] + sys.argv)
+    elif t == "restart":
+        bot.send_message(CHAT_ID, "🔄 Рестарт...")
+        os.execv(sys.executable, ['python'] + sys.argv)
     else:
-        # Режим Терминала
-        res = subprocess.getoutput(text)
-        if not res: res = "✅ Ок"
-        bot.send_message(CHAT_ID, f"💻 **Консоль:**\n`{res[:4000]}`", parse_mode="Markdown")
+        # Выполнение любой команды терминала
+        res = subprocess.getoutput(m.text)
+        if not res: res = "✅ Выполнено"
+        bot.send_message(CHAT_ID, f"💻 **Терминал:**\n`{res[:4000]}`", parse_mode="Markdown")
 
-bot.polling(none_stop=True)
+# Запуск
+if __name__ == "__main__":
+    try:
+        bot.polling(none_stop=True)
+    except Exception as e:
+        # Авторестарт при падении
+        os.execv(sys.executable, ['python'] + sys.argv)
